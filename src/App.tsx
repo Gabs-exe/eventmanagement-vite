@@ -30,6 +30,7 @@ interface Event {
   remainingSpots: number;
   categoryID: string;
   organizerID: string;
+  price?: number;
 }
 
 interface Category {
@@ -52,6 +53,9 @@ function App() {
   const [selectedCategory, setSelectedCategory] = useState<string>('');
   const [isCreatingEvent, setIsCreatingEvent] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [searchTerm, setSearchTerm] = useState<string>('');
+  const [priceFilter, setPriceFilter] = useState<string>('all');
+  const [sortBy, setSortBy] = useState<string>('date');
 
   const { user, signOut, signIn } = useAuthenticator();
   const isAuthenticated = !!user;
@@ -97,19 +101,24 @@ function App() {
     const formData = new FormData(form);
 
     try {
+      const capacity = parseInt(formData.get('capacity') as string);
       const newEvent = await client.models.Event.create({
         title: formData.get('title') as string,
         description: formData.get('description') as string,
         date: formData.get('date') as string,
         time: formData.get('time') as string,
         location: formData.get('location') as string,
-        capacity: parseInt(formData.get('capacity') as string),
-        remainingSpots: parseInt(formData.get('capacity') as string),
+        capacity: capacity,
+        remainingSpots: capacity,
+        price: parseFloat(formData.get('price') as string) || 0,
         categoryID: formData.get('categoryID') as string,
         organizerID: user.userId,
+        isActive: true,
+        bookingDate: new Date().toISOString(),
+        totalAmount: 0, // Will be calculated based on price and tickets
       });
 
-      setEvents([...events, newEvent]);
+      setEvents([...events, newEvent.data]);
       setIsCreatingEvent(false);
       form.reset();
     } catch (error) {
@@ -134,7 +143,11 @@ function App() {
       const booking = await client.models.Booking.create({
         eventID: eventId,
         attendeeID: user.userId,
+        attendeeName: user.signInDetails?.loginId || 'Unknown',
+        attendeeEmail: user.signInDetails?.loginId || 'unknown@email.com',
         status: 'CONFIRMED',
+        bookingDate: new Date().toISOString(),
+        totalAmount: event.price || 0,
       });
 
       // Update event remaining spots
@@ -143,7 +156,7 @@ function App() {
         remainingSpots: event.remainingSpots - 1,
       });
 
-      setUserBookings([...userBookings, booking]);
+      setUserBookings([...userBookings, booking.data]);
       setEvents(events.map(e => 
         e.id === eventId 
           ? { ...e, remainingSpots: e.remainingSpots - 1 }
@@ -192,6 +205,32 @@ function App() {
             ))}
           </SelectField>
 
+          <SelectField
+            label="Price Filter"
+            value={priceFilter}
+            onChange={e => setPriceFilter(e.target.value)}
+          >
+            <option value="all">All Prices</option>
+            <option value="free">Free Events</option>
+            <option value="paid">Paid Events</option>
+          </SelectField>
+
+          <SelectField
+            label="Sort By"
+            value={sortBy}
+            onChange={e => setSortBy(e.target.value)}
+          >
+            <option value="date">Date</option>
+            <option value="price">Price</option>
+          </SelectField>
+
+          <TextField
+            label="Search Events"
+            value={searchTerm}
+            onChange={e => setSearchTerm(e.target.value)}
+            placeholder="Search by title or description"
+          />
+
           {isAuthenticated && (
             <Button onClick={() => setIsCreatingEvent(!isCreatingEvent)}>
               {isCreatingEvent ? 'Cancel' : 'Create Event'}
@@ -209,6 +248,7 @@ function App() {
                 <TextField label="Time" name="time" type="time" required />
                 <TextField label="Location" name="location" required />
                 <TextField label="Capacity" name="capacity" type="number" required />
+                <TextField label="Price ($)" name="price" type="number" step="0.01" placeholder="0.00 for free events" />
                 <SelectField label="Category" name="categoryID" required>
                   {categories.map(category => (
                     <option key={category.id} value={category.id}>
@@ -225,7 +265,19 @@ function App() {
         <Heading level={2}>Upcoming Events</Heading>
         <Flex direction="row" wrap="wrap" gap="1rem">
           {events
-            .filter(event => !selectedCategory || event.categoryID === selectedCategory)
+            .filter(event => {
+              const matchesCategory = !selectedCategory || event.categoryID === selectedCategory;
+              const matchesSearch = event.title.toLowerCase().includes(searchTerm.toLowerCase()) || event.description.toLowerCase().includes(searchTerm.toLowerCase());
+              const matchesPrice = priceFilter === 'all' || (priceFilter === 'free' && event.price === 0) || (priceFilter === 'paid' && event.price > 0);
+              return matchesCategory && matchesSearch && matchesPrice;
+            })
+            .sort((a, b) => {
+              if (sortBy === 'date') {
+                return new Date(a.date).getTime() - new Date(b.date).getTime();
+              } else {
+                return (a.price || 0) - (b.price || 0);
+              }
+            })
             .map(event => (
               <Card key={event.id} variation="elevated" width="300px">
                 <Heading level={3}>{event.title}</Heading>
@@ -234,6 +286,7 @@ function App() {
                   <Text>📅 {new Date(event.date).toLocaleDateString()}</Text>
                   <Text>⏰ {event.time}</Text>
                   <Text>📍 {event.location}</Text>
+                  <Text>💰 {event.price ? `$${event.price.toFixed(2)}` : 'Free'}</Text>
                   <Badge variation={event.remainingSpots > 0 ? "info" : "error"}>
                     {event.remainingSpots} spots remaining
                   </Badge>
@@ -256,6 +309,31 @@ function App() {
               </Card>
             ))}
         </Flex>
+
+        {isAuthenticated && userBookings.length > 0 && (
+          <>
+            <Heading level={2}>My Bookings</Heading>
+            <Flex direction="row" wrap="wrap" gap="1rem">
+              {userBookings.map(booking => {
+                const bookedEvent = events.find(e => e.id === booking.eventID);
+                return bookedEvent ? (
+                  <Card key={booking.id} variation="outlined" width="300px">
+                    <Heading level={4}>{bookedEvent.title}</Heading>
+                    <Flex direction="column" gap="0.5rem">
+                      <Text>📅 {new Date(bookedEvent.date).toLocaleDateString()}</Text>
+                      <Text>⏰ {bookedEvent.time}</Text>
+                      <Text>📍 {bookedEvent.location}</Text>
+                      <Badge variation="success">
+                        Status: {booking.status}
+                      </Badge>
+                      <Text>💰 Total: ${booking.totalAmount?.toFixed(2) || '0.00'}</Text>
+                    </Flex>
+                  </Card>
+                ) : null;
+              })}
+            </Flex>
+          </>
+        )}
       </Flex>
     </View>
   );

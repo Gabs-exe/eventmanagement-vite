@@ -6,64 +6,59 @@ const schema = a.schema({
       name: a.string().required(),
       description: a.string(),
       color: a.string(), // for UI theming
-      events: a.hasMany('Event'),
+      events: a.hasMany('Event', 'categoryID'),
     })
-    .authorization([
+    .authorization((allow) => [
       // Public read access for Categories
-      a.allow.public().to(['read']),
-      // Only admins should be able to manage categories
-      a.allow.private().to(['create', 'update', 'delete']),
+      allow.guest().to(['read']),
+      // Authenticated users can manage categories
+      allow.authenticated().to(['create', 'read', 'update', 'delete']),
     ]),
 
   Event: a
     .model({
       title: a.string().required(),
       description: a.string(),
-      startDateTime: a.datetime().required(),
-      endDateTime: a.datetime().required(),
+      date: a.date().required(),
+      time: a.time().required(),
       location: a.string().required(),
       capacity: a.integer().required(),
-      availableSpots: a.integer().required(),
-      price: a.float(), // optional, 0 for free events
-      category: a.belongsTo('Category'),
+      remainingSpots: a.integer().required(),
+      price: a.float().default(0), // optional, 0 for free events
+      categoryID: a.id().required(),
+      category: a.belongsTo('Category', 'categoryID'),
       imageUrl: a.string(),
-      organizerId: a.string().required(),
+      organizerID: a.string().required(),
       isActive: a.boolean().default(true),
-      createdAt: a.datetime(),
-      updatedAt: a.datetime(),
-      bookings: a.hasMany('Booking'),
+      createdAt: a.timestamp(),
+      updatedAt: a.timestamp(),
+      bookings: a.hasMany('Booking', 'eventID'),
     })
-    .authorization([
+    .authorization((allow) => [
       // Public can read events
-      a.allow.public().to(['read']),
-      // Authenticated users can create events
-      a.allow.authenticated().to(['create']),
-      // Event owners can update/delete their events
-      a.allow.owner('organizerId').to(['update', 'delete']),
+      allow.guest().to(['read']),
+      // Authenticated users can create and manage events
+      allow.authenticated().to(['create', 'update', 'delete']),
     ]),
 
   Booking: a
     .model({
-      eventId: a.string().required(),
-      userId: a.string(), // optional for anonymous bookings
+      eventID: a.id().required(),
+      event: a.belongsTo('Event', 'eventID'),
+      attendeeID: a.string().required(), // user who made the booking
       attendeeName: a.string().required(),
       attendeeEmail: a.string().required(),
       attendeePhone: a.string(),
       numberOfTickets: a.integer().default(1),
-      bookingStatus: a.enum(['CONFIRMED', 'PENDING', 'CANCELLED']).required(),
-      bookingDate: a.datetime().required(),
+      status: a.enum(['CONFIRMED', 'PENDING', 'CANCELLED', 'WAITLIST']),
+      bookingDate: a.timestamp(),
       totalAmount: a.float().required(),
-      event: a.belongsTo('Event'),
     })
-    .authorization([
+    .authorization((allow) => [
       // Anyone can create bookings
-      a.allow.public().to(['create']),
-      // Users can only view their own bookings
-      a.allow.owner('userId').to(['read']),
-      // Event organizer can view all bookings for their events
-      a.allow.private().to(['read']).when(ctx => 
-        ctx.source.event.organizerId === ctx.identity.username
-      ),
+      allow.guest().to(['create']),
+      // Authenticated users can view and manage bookings
+      allow.authenticated().to(['read', 'update']),
     ]),
 });
 
